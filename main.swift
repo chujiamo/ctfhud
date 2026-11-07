@@ -13,6 +13,10 @@ struct WindowOrigin: Codable {
 }
 
 private struct WindowPreferences: Codable {
+    // Optional keys preserve decoding of the existing v4 UserDefaults blob.
+    var layoutMode: HUDLayoutMode? = nil
+    var topBarOrigin: WindowOrigin? = nil
+    var topBarWidthFraction: Double? = nil
     var clickThrough = false
     var positionLocked = false
     var cleanMode = false
@@ -66,6 +70,21 @@ final class HUDStore: ObservableObject {
     @Published var visibility = HUDVisibility() {
         didSet { saveWindowPreferences(); onWindowStateChanged?() }
     }
+    @Published var layoutMode: HUDLayoutMode = .floating {
+        didSet { saveWindowPreferences(); onWindowStateChanged?() }
+    }
+    @Published var topBarWidthFraction = 0.92 {
+        didSet {
+            let clamped = HUDBarSizing.clampedFraction(topBarWidthFraction)
+            if clamped != topBarWidthFraction { topBarWidthFraction = clamped; return }
+            saveWindowPreferences(); onWindowStateChanged?()
+        }
+    }
+    // Calculated for the current NSScreen; not persisted as a device-specific width.
+    @Published var renderedBarWidth: CGFloat = 1200
+    @Published var topBarOrigin: WindowOrigin? = nil {
+        didSet { saveWindowPreferences() }
+    }
     @Published var isAdjustingPosition = false {
         didSet { onWindowStateChanged?() }
     }
@@ -115,7 +134,10 @@ final class HUDStore: ObservableObject {
     }
 
     private func saveWindowPreferences() {
-        let preferences = WindowPreferences(clickThrough: clickThrough,
+        let preferences = WindowPreferences(layoutMode: layoutMode,
+                                            topBarOrigin: topBarOrigin,
+                                            topBarWidthFraction: topBarWidthFraction,
+                                            clickThrough: clickThrough,
                                             positionLocked: positionLocked,
                                             cleanMode: cleanMode,
                                             backgroundOpacity: backgroundOpacity,
@@ -157,6 +179,9 @@ final class HUDStore: ObservableObject {
         }
         if let data = UserDefaults.standard.data(forKey: windowPreferencesKey),
            let preferences = try? JSONDecoder().decode(WindowPreferences.self, from: data) {
+            layoutMode = preferences.layoutMode ?? .floating
+            topBarOrigin = preferences.topBarOrigin
+            topBarWidthFraction = HUDBarSizing.clampedFraction(preferences.topBarWidthFraction ?? 0.92)
             clickThrough = preferences.clickThrough
             positionLocked = preferences.positionLocked
             cleanMode = preferences.cleanMode
@@ -335,7 +360,7 @@ final class HUDStore: ObservableObject {
         let session = URLSession(configuration: cfg)
         var req = URLRequest(url: url)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("CTFHUD/1.8.1", forHTTPHeaderField: "User-Agent")
+        req.setValue("CTFHUD/1.9.0", forHTTPHeaderField: "User-Agent")
         session.dataTask(with: req) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -470,10 +495,24 @@ struct HUDView: View {
         return (v.overallRank && s.rank != nil) || (v.groupRank && s.categoryRank != nil) ||
                (v.currentScore && s.score != nil)
     }
+    private var hasBarAuxiliary: Bool {
+        (v.latestSubmission && (!store.cleanLog.isEmpty ||
+            (store.hasLiveScoreboard && store.snapshot.lastSolveAt != nil))) ||
+        (v.lastUpdated && store.lastSuccessfulUpdate != nil) ||
+        (!store.cleanMode && v.feedStatus) || v.timezone
+    }
 
     var body: some View {
+        if store.layoutMode == .topBar {
+            topBarBody
+        } else {
+            floatingBody
+        }
+    }
+
+    private var floatingBody: some View {
         let p = store.active
-        VStack(alignment: .leading, spacing: store.cleanMode ? 8 : 10) {
+        return VStack(alignment: .leading, spacing: store.cleanMode ? 8 : 10) {
             // A move handle always appears while repositioning, even when all
             // optional components are off and the panel is normally click-through.
             if store.isAdjustingPosition {
@@ -533,6 +572,223 @@ struct HUDView: View {
                 RoundedRectangle(cornerRadius: store.cleanMode ? 12 : 16)
                     .stroke(accent.opacity((store.cleanMode ? 0.22 : 0.45) * bg), lineWidth: 1)
             }
+        }
+    }
+
+    // The Top Bar is a genuine single-line ticker: 42 points tall on every
+    // display. ViewThatFits selects a shorter *horizontal* variant when needed;
+    // there is deliberately no VStack/two-row fallback.
+    private var topBarBody: some View {
+        ViewThatFits(in: .horizontal) {
+            singleLineBar(density: 0) // Full labels, deltas and auxiliary data
+            singleLineBar(density: 1) // Short labels; keep clocks and standings
+            singleLineBar(density: 2) // Minimum viable one-line competition HUD
+        }
+        .frame(width: max(1, store.renderedBarWidth - 20),
+               height: CGFloat(HUDBarSizing.compactHeight), alignment: .leading)
+        .padding(.horizontal, 10)
+        .frame(width: store.renderedBarWidth,
+               height: CGFloat(HUDBarSizing.compactHeight))
+        .background(RoundedRectangle(cornerRadius: 9)
+            .fill(Color(red: 0.065, green: 0.060, blue: 0.10).opacity(bg)))
+        .overlay {
+            if v.border {
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(accent.opacity(0.36 * bg), lineWidth: 1)
+            }
+        }
+    }
+
+    private func singleLineBar(density: Int) -> some View {
+        HStack(alignment: .center, spacing: density == 0 ? 11 : 7) {
+            if store.isAdjustingPosition {
+                inlinePositionAdjustment
+            } else if density == 0 {
+                inlineDragHandle
+            }
+            if density == 0 && !store.cleanMode { inlineIdentity }
+            if showNextColumn { inlineCountdown(isEnd: false, density: density) }
+            if showEndColumn { inlineCountdown(isEnd: true, density: density) }
+            if store.hasLiveScoreboard && hasEnabledMetric {
+                inlineStandings(density: density)
+            }
+            if density == 0 { inlineAuxiliary }
+            else if density == 1, v.lastUpdated, let last = store.lastSuccessfulUpdate {
+                Text("↻ " + ClockCore.format(last, "HH:mm:ss", zone: store.active.timeZoneID))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(muted.opacity(ink))
+                    .lineLimit(1)
+            }
+        }
+        .frame(height: CGFloat(HUDBarSizing.compactHeight))
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    @ViewBuilder
+    private var inlineDragHandle: some View {
+        if !store.effectiveClickThrough && !store.effectivePositionLocked {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(muted.opacity(ink))
+                .frame(width: 18, height: 30)
+                .overlay(HUDDragSurface(enabled: true))
+                .help(t("拖动左侧手柄移动横幅"))
+        }
+    }
+
+    private var inlinePositionAdjustment: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.left.and.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(accent.opacity(ink))
+                .frame(width: 24, height: 30)
+                .overlay(HUDDragSurface(enabled: true))
+                .help(t("调整位置 · 点击穿透暂时关闭 · 拖动此处"))
+            Button(t("完成")) { store.finishPositionAdjustment() }
+                .controlSize(.mini)
+                .buttonStyle(.bordered)
+                .tint(accent)
+        }
+    }
+
+    @ViewBuilder
+    private var inlineIdentity: some View {
+        if showFullHeader || showStatusLine {
+            HStack(spacing: 5) {
+                if v.brandIcon {
+                    Image(systemName: "diamond.fill")
+                        .foregroundStyle(accent.opacity(ink))
+                }
+                if v.eventName {
+                    Text(store.active.name)
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: 118)
+                }
+                if v.liveIndicator {
+                    Text(t("● LIVE HUD"))
+                        .foregroundStyle(Color.green.opacity(ink))
+                        .lineLimit(1)
+                }
+                if v.clickThroughStatus {
+                    Text(t("点击穿透：") + t(store.clickThrough ? "开启" : "关闭"))
+                        .foregroundStyle(muted.opacity(ink))
+                        .lineLimit(1)
+                }
+                if v.moveHint {
+                    Image(systemName: store.effectivePositionLocked ? "lock.fill" : "hand.draw")
+                        .foregroundStyle(muted.opacity(ink))
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color.white.opacity(ink))
+        }
+    }
+
+    private func inlineCountdown(isEnd: Bool, density: Int) -> some View {
+        let stage = isEnd ? store.end : store.upcoming
+        let showLabel = isEnd ? v.endLabel : v.nextLabel
+        let showCountdown = isEnd ? v.endCountdown : v.nextCountdown
+        let showTime = isEnd ? v.endTime : v.nextTime
+        return HStack(alignment: .firstTextBaseline, spacing: 4) {
+            if showLabel {
+                // Short labels avoid expanding the bar when users give a phase
+                // a long title. The full title remains in Control Center.
+                Text(isEnd ? t("END") : t("NEXT"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(muted.opacity(ink))
+                    .lineLimit(1)
+            }
+            if showCountdown {
+                Text(stage.map { ClockCore.countdown(to: $0.date, now: store.now) } ?? "--:--:--")
+                    .font(.system(size: density == 2 ? 14 : 16,
+                                  weight: .bold, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle((isEnd ? Color.white : accent).opacity(ink))
+                    .lineLimit(1)
+            }
+            if showTime && density < 2 {
+                Text(stage.map { ClockCore.format($0.date, "MM/dd HH:mm", zone: store.active.timeZoneID) } ?? "—")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(muted.opacity(ink))
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func inlineStandings(density: Int) -> some View {
+        HStack(spacing: density == 0 ? 9 : 6) {
+            if v.overallRank, let rank = store.snapshot.rank {
+                inlineMetric(label: density == 0 ? t(store.snapshot.rankDerived ? "全场序位*" : "全场排名") : "R",
+                             value: "#\(rank)",
+                             change: (density < 2 && v.overallRankDelta) ? rankChange(store.scoreChanges?.overallRankImprovement) : nil,
+                             color: changeColor(store.scoreChanges?.overallRankImprovement.map(Double.init)))
+            }
+            if v.groupRank, let rank = store.snapshot.categoryRank {
+                inlineMetric(label: density == 0 ? t(store.snapshot.categoryRankDerived ? "组别序位*" : "组别排名") : "G",
+                             value: "#\(rank)",
+                             change: (density < 2 && v.groupRankDelta) ? rankChange(store.scoreChanges?.categoryRankImprovement) : nil,
+                             color: changeColor(store.scoreChanges?.categoryRankImprovement.map(Double.init)))
+            }
+            if v.currentScore, let score = store.snapshot.score {
+                inlineMetric(label: density == 0 ? t("当前积分") : "PTS",
+                             value: String(format: "%.2f", score),
+                             change: (density < 2 && v.scoreDelta) ? scoreChange(store.scoreChanges?.score) : nil,
+                             color: changeColor(store.scoreChanges?.score))
+            }
+        }
+    }
+
+    private func inlineMetric(label: String, value: String, change: String?, color: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(muted.opacity(ink))
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(ink))
+            if let change = change {
+                Text(change)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(color.opacity(ink))
+            }
+        }
+        .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var inlineAuxiliary: some View {
+        if v.latestSubmission, let submission = store.cleanLog.first {
+            Text(submission.challenge + " · " + t(submission.result))
+                .lineLimit(1).truncationMode(.tail)
+                .frame(width: 120, alignment: .leading)
+                .font(.system(size: 9))
+                .foregroundStyle(muted.opacity(ink))
+        } else if v.latestSubmission, store.hasLiveScoreboard,
+                  let lastSolve = store.snapshot.lastSolveAt {
+            Text("✓ " + ClockCore.format(lastSolve, "HH:mm:ss", zone: store.active.timeZoneID))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(muted.opacity(ink))
+                .lineLimit(1)
+        }
+        if v.lastUpdated, let last = store.lastSuccessfulUpdate {
+            Text("↻ " + ClockCore.format(last, "HH:mm:ss", zone: store.active.timeZoneID))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(muted.opacity(ink))
+                .lineLimit(1)
+        }
+        if !store.cleanMode && v.feedStatus {
+            Text(L10n.status(store.snapshot.status, choice: store.languageChoice))
+                .font(.system(size: 9))
+                .foregroundStyle(muted.opacity(ink))
+                .lineLimit(1).truncationMode(.tail)
+                .frame(width: 76, alignment: .leading)
+        }
+        if v.timezone {
+            Text(store.active.timeZoneID == "Asia/Hong_Kong" ? "HKT" : store.active.timeZoneID)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(muted.opacity(ink))
+                .lineLimit(1)
         }
     }
 
@@ -995,7 +1251,22 @@ struct SettingsView: View {
                 visibilitySettings
                 GroupBox(t("悬浮窗 · 位置与外观")) {
                     VStack(alignment: .leading, spacing: 11) {
-                        Picker(t("显示模式"), selection: $store.cleanMode) {
+                        Picker(t("窗口布局"), selection: $store.layoutMode) {
+                            Text(t("普通悬浮窗")).tag(HUDLayoutMode.floating)
+                            Text(t("顶部横幅")).tag(HUDLayoutMode.topBar)
+                        }.pickerStyle(.segmented)
+                        if store.layoutMode == .topBar {
+                            HStack(spacing: 12) {
+                                Text(t("横幅宽度")).frame(width: 90, alignment: .leading)
+                                Slider(value: $store.topBarWidthFraction, in: 0.70...0.98, step: 0.02)
+                                Text("\(Int(store.topBarWidthFraction * 100))%")
+                                    .font(.system(.body, design: .monospaced))
+                                    .frame(width: 48, alignment: .trailing)
+                            }
+                            Text(t("顶部横幅默认放在菜单栏下方的屏幕顶部；可通过位置调整模式拖动，切换回普通悬浮窗不会丢失原来的位置。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Picker(t("显示内容模式"), selection: $store.cleanMode) {
                             Text(t("完整模式")).tag(false)
                             Text(t("纯净模式")).tag(true)
                         }.pickerStyle(.segmented)
@@ -1009,7 +1280,9 @@ struct SettingsView: View {
                                 if store.isAdjustingPosition { store.finishPositionAdjustment() }
                                 else { store.startPositionAdjustment() }
                             }
-                            Button(t("重置到右上角")) { store.onResetWindowPosition?() }
+                            Button(t(store.layoutMode == .topBar ? "重置到顶部中央" : "重置到右上角")) {
+                                store.onResetWindowPosition?()
+                            }
                         }
                         HStack(spacing: 12) {
                             Text(t("背景透明度")).frame(width: 90, alignment: .leading)
@@ -1029,7 +1302,9 @@ struct SettingsView: View {
                         }
                         Text(t("透明度 0% = 完全不透明；100% = 完全透明。背景与文字独立调节，不再降低整个窗口的不透明度。"))
                             .font(.caption).foregroundStyle(.secondary)
-                        Text(store.isAdjustingPosition
+                        Text(store.isAdjustingPosition && store.layoutMode == .topBar
+                            ? t("● 顶部横幅调整中：点击穿透已临时关闭；拖动顶部临时手柄，按完成后恢复原设置。")
+                            : store.isAdjustingPosition
                             ? t("● 位置调整中：点击穿透已临时关闭、位置锁定已临时解除。直接拖动 HUD 顶部标题栏；按「完成位置调整」恢复原设置。")
                             : L10n.format("● 当前：点击穿透{{click}} · 位置{{lock}}。移动位置会自动保存，下次启动恢复。",
                                      choice: store.languageChoice, values: [
@@ -1064,6 +1339,9 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var clickThroughItem: NSMenuItem?
     private var lockItem: NSMenuItem?
     private var cleanModeItem: NSMenuItem?
+    private var layoutItem: NSMenuItem?
+    private var resetPositionItem: NSMenuItem?
+    private var appliedLayout: HUDLayoutMode?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -1081,6 +1359,7 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.isMovableByWindowBackground = false  // Dragging is header-only.
         panel.delegate = self
         panel.hidesOnDeactivate = false
+        appliedLayout = store.layoutMode
         restoringWindowPosition = true
         updateHUDSize()
         restoreWindowPosition()
@@ -1133,6 +1412,8 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(menuItem("刷新排名", #selector(refreshScores)))
         menu.addItem(.separator())
         menu.addItem(menuItem("显示 / 隐藏 HUD", #selector(toggleHUD)))
+        layoutItem = menuItem("顶部横幅模式", #selector(toggleLayout))
+        menu.addItem(layoutItem!)
         cleanModeItem = menuItem("纯净模式", #selector(toggleCleanMode))
         menu.addItem(cleanModeItem!)
         adjustItem = menuItem("调整悬浮窗位置…", #selector(togglePositionAdjustment))
@@ -1141,7 +1422,8 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(clickThroughItem!)
         lockItem = menuItem("锁定位置", #selector(togglePositionLock))
         menu.addItem(lockItem!)
-        menu.addItem(menuItem("位置重置到右上角", #selector(resetWindowPositionAction)))
+        resetPositionItem = menuItem("位置重置到右上角", #selector(resetWindowPositionAction))
+        menu.addItem(resetPositionItem!)
         menu.addItem(.separator())
         menu.addItem(menuItem("退出 CTF HUD", #selector(quit)))
         statusItem.menu = menu
@@ -1151,36 +1433,69 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func applyWindowState() {
         guard panel != nil else { return }
         panel.ignoresMouseEvents = store.effectiveClickThrough
-        // Never change panel.alphaValue: this would also fade its text.
+        // Background and text transparency are independent SwiftUI properties.
         panel.alphaValue = 1.0
+        if appliedLayout != store.layoutMode {
+            // Preserve positions independently across the two window modes.
+            appliedLayout = store.layoutMode
+            restoringWindowPosition = true
+            updateHUDSize()
+            restoreWindowPosition()
+            restoringWindowPosition = false
+        }
         DispatchQueue.main.async { [weak self] in self?.updateHUDSize() }
         updateMenuState()
     }
 
     private func updateHUDSize() {
         guard panel != nil, hostingView != nil else { return }
-        // Dynamic height allows unavailable ranking/submission rows to vanish,
-        // without leaving a blank window area in clean mode.
-        hostingView.layoutSubtreeIfNeeded()
-        let desired = hostingView.fittingSize
-        let height = ceil(max(96, desired.height))
-        guard abs(panel.frame.height - height) > 2 else { return }
+        let desiredWidth: CGFloat
+        let height: CGFloat
+        if store.layoutMode == .topBar {
+            let area = (panel.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            let available = Double(area?.width ?? 1200)
+            desiredWidth = CGFloat(HUDBarSizing.barWidth(available: available,
+                                                        fraction: store.topBarWidthFraction))
+            if abs(store.renderedBarWidth - desiredWidth) > 0.5 {
+                store.renderedBarWidth = desiredWidth
+                hostingView.invalidateIntrinsicContentSize()
+            }
+            // Fixed 42 pt: neither narrow screens nor position adjustment
+            // may turn the top bar into a two-row panel.
+            height = CGFloat(HUDBarSizing.compactHeight)
+        } else {
+            desiredWidth = 474
+            hostingView.layoutSubtreeIfNeeded()
+            let measured = hostingView.fittingSize
+            height = ceil(max(96, measured.height))
+        }
         let old = panel.frame
+        guard abs(old.height - height) > 1 || abs(old.width - desiredWidth) > 1 else { return }
         let wasRestoring = restoringWindowPosition
         restoringWindowPosition = true
-        let desiredOrigin = safeOrigin(NSPoint(x: old.minX, y: old.maxY - height),
-                                       size: NSSize(width: old.width, height: height))
-        panel.setFrame(NSRect(origin: desiredOrigin,
-                              size: NSSize(width: old.width, height: height)),
+        let candidate: NSPoint
+        if store.layoutMode == .topBar {
+            candidate = NSPoint(x: old.midX - desiredWidth / 2, y: old.maxY - height)
+        } else {
+            candidate = NSPoint(x: old.minX, y: old.maxY - height)
+        }
+        let dimensions = NSSize(width: desiredWidth, height: height)
+        panel.setFrame(NSRect(origin: safeOrigin(candidate, size: dimensions), size: dimensions),
                        display: true, animate: false)
         restoringWindowPosition = wasRestoring
-        if !wasRestoring {
-            store.windowOrigin = WindowOrigin(x: Double(panel.frame.minX),
-                                              y: Double(panel.frame.minY))
-        }
+        if !wasRestoring { persistPanelPosition() }
+    }
+
+    private func persistPanelPosition() {
+        let origin = WindowOrigin(x: Double(panel.frame.minX), y: Double(panel.frame.minY))
+        if store.layoutMode == .topBar { store.topBarOrigin = origin }
+        else { store.windowOrigin = origin }
     }
 
     private func updateMenuState() {
+        layoutItem?.state = store.layoutMode == .topBar ? .on : .off
+        resetPositionItem?.title = L10n.tr(store.layoutMode == .topBar ?
+            "重置到顶部中央" : "位置重置到右上角", choice: store.languageChoice)
         cleanModeItem?.title = L10n.format("纯净模式：{{state}}", choice: store.languageChoice,
                                           values: ["state": L10n.tr(store.cleanMode ? "开启" : "关闭", choice: store.languageChoice)])
         cleanModeItem?.state = store.cleanMode ? .on : .off
@@ -1211,24 +1526,35 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func defaultOrigin() -> NSPoint {
-        guard let area = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
+        guard let area = (panel.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
             return NSPoint(x: 100, y: 100)
+        }
+        if store.layoutMode == .topBar {
+            // NSScreen.visibleFrame excludes the macOS menu bar / Dock and
+            // therefore avoids placing the HUD over the menu bar or notch.
+            return NSPoint(x: area.midX - panel.frame.width / 2,
+                           y: area.maxY - panel.frame.height - 8)
         }
         return NSPoint(x: area.maxX - panel.frame.width - 20,
                        y: area.maxY - panel.frame.height - 20)
     }
 
     private func restoreWindowPosition() {
-        let saved = store.windowOrigin.map { NSPoint(x: $0.x, y: $0.y) }
+        let savedOrigin = store.layoutMode == .topBar ? store.topBarOrigin : store.windowOrigin
+        let saved = savedOrigin.map { NSPoint(x: $0.x, y: $0.y) }
         let origin = safeOrigin(saved ?? defaultOrigin(), size: panel.frame.size)
         panel.setFrameOrigin(origin)
     }
 
     private func resetWindowPosition() {
         restoringWindowPosition = true
+        // Clearing just this mode's saved position lets an upgraded app use
+        // the top-centre default even if the floating panel was moved before.
+        if store.layoutMode == .topBar { store.topBarOrigin = nil }
+        else { store.windowOrigin = nil }
         panel.setFrameOrigin(safeOrigin(defaultOrigin(), size: panel.frame.size))
         restoringWindowPosition = false
-        store.windowOrigin = WindowOrigin(x: Double(panel.frame.minX), y: Double(panel.frame.minY))
+        persistPanelPosition()
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -1237,7 +1563,13 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !restoringWindowPosition,
               let movingWindow = notification.object as? NSWindow,
               movingWindow === panel else { return }
-        store.windowOrigin = WindowOrigin(x: Double(panel.frame.minX), y: Double(panel.frame.minY))
+        persistPanelPosition()
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        guard let movingWindow = notification.object as? NSWindow,
+              movingWindow === panel, store.layoutMode == .topBar else { return }
+        DispatchQueue.main.async { [weak self] in self?.updateHUDSize() }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -1261,6 +1593,9 @@ final class CTFApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func toggleHUD() {
         if panel.isVisible { panel.orderOut(nil); store.isVisible = false }
         else { panel.orderFrontRegardless(); store.isVisible = true }
+    }
+    @objc private func toggleLayout() {
+        store.layoutMode = store.layoutMode == .floating ? .topBar : .floating
     }
     @objc private func toggleCleanMode() { store.cleanMode.toggle() }
     @objc private func toggleClickThrough() { store.clickThrough.toggle() }

@@ -182,5 +182,15 @@
   "（API 只提供时间）": "(API provides time only)",
   "（并列）": " (tied)",
   "＋ 添加阶段": "＋ Add phase",
-  "＋新比赛": "＋ New contest"
+  "＋新比赛": "＋ New contest",
+  "窗口布局": "Window layout",
+  "普通悬浮窗": "Floating panel",
+  "顶部横幅": "Top bar",
+  "顶部横幅模式": "Top bar mode",
+  "横幅宽度": "Bar width",
+  "显示内容模式": "Content density",
+  "重置到顶部中央": "Reset to top center",
+  "拖动左侧手柄移动横幅": "Drag handle to move the top bar",
+  "顶部横幅默认放在菜单栏下方的屏幕顶部；可通过位置调整模式拖动，切换回普通悬浮窗不会丢失原来的位置。": "The top bar starts below the macOS menu bar. Use position adjustment to move it; the floating-panel position is saved separately.",
+  "● 顶部横幅调整中：点击穿透已临时关闭；拖动顶部临时手柄，按完成后恢复原设置。": "● Adjusting top bar: click-through is temporarily disabled. Drag the temporary top handle; choose Done to restore your settings."
 }

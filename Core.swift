@@ -163,6 +163,26 @@ struct ScoreChanges: Equatable {
 
 // All visual elements may be independently hidden. If all are hidden, the
 // menu bar still provides access to settings and the move handle.
+// The window layout is independent of the full/clean content preference.
+// Persisting it separately lets the same competition use either presentation.
+enum HUDLayoutMode: String, Codable, CaseIterable {
+    case floating
+    case topBar
+}
+
+// Pure sizing logic, testable without AppKit on non-macOS hosts.
+enum HUDBarSizing {
+    static let compactHeight: Double = 42
+    static func clampedFraction(_ requested: Double) -> Double {
+        guard requested.isFinite else { return 0.92 }
+        return min(0.98, max(0.70, requested))
+    }
+    static func barWidth(available: Double, fraction: Double) -> Double {
+        let inner = max(1, available - 16)
+        return min(inner, max(1, available * clampedFraction(fraction)))
+    }
+}
+
 struct HUDVisibility: Codable, Equatable {
     var brandIcon = true
     var eventName = true

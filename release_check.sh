@@ -7,7 +7,7 @@ cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 from pathlib import Path
 import re, sys
 base = Path.cwd()
-files = [base/'Core.swift', base/'Localization.swift', base/'main.swift', base/'Tests/CoreTests.swift', base/'Tests/WindowLifecycleTests.py',
+files = [base/'Core.swift', base/'Localization.swift', base/'main.swift', base/'Tests/CoreTests.swift', base/'Tests/WindowLifecycleTests.py', base/'Tests/TopBarSourceTests.py',
          base/'locales/en.json', base/'locales/zh-Hant.json', base/'locales/ja.json',
          base/'README.md', base/'build_app.sh', base/'.gitignore', base/'release_check.sh']
 missing = [p.name for p in files if not p.is_file()]

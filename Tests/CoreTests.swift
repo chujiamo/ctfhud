@@ -111,6 +111,21 @@ struct CoreTestRunner {
         let v = HUDVisibility()
         let vRoundTrip = try JSONDecoder().decode(HUDVisibility.self, from: JSONEncoder().encode(v))
         check(vRoundTrip == v, "HUD element switches persisted")
+        check(HUDLayoutMode.floating.rawValue == "floating" && HUDLayoutMode.topBar.rawValue == "topBar",
+              "layout mode identifier stability")
+        let encodedLayout = try JSONEncoder().encode(HUDLayoutMode.topBar)
+        let decodedLayout = try JSONDecoder().decode(HUDLayoutMode.self, from: encodedLayout)
+        check(decodedLayout == .topBar, "top bar layout preference Codable roundtrip")
+        check(abs(HUDBarSizing.barWidth(available: 1512, fraction: 0.92) - 1391.04) < 0.001,
+              "default 92% top bar width")
+        check(HUDBarSizing.barWidth(available: 1512, fraction: 1.6) <= 1512 * 0.98 + 0.01,
+              "oversized width ratio clamped")
+        check(HUDBarSizing.barWidth(available: 320, fraction: 0.7) <= 304,
+              "small displays stay within visible frame")
+        check(HUDBarSizing.clampedFraction(.nan) == 0.92,
+              "non-finite width setting falls back safely")
+        check(HUDBarSizing.compactHeight == 42, "top bar always remains 42pt high")
+
         // Runtime localization and automatic language selection.
         let localesURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("locales", isDirectory: true)
@@ -130,6 +145,9 @@ struct CoreTestRunner {
         check(L10n.status("已同步", choice: "en") == "Synced", "Internal score status localized on display")
         check(L10n.status("同步失败：timeout（原数据可能过时）", choice: "en").contains("Sync failed"), "localized status templates")
         check(L10n.tr("Personal Team X", choice: "ja") == "Personal Team X", "user-provided names untouched")
-        print("All v1.8 tests passed: protocols, timeline, migrations, score deltas, language selection, English/Chinese/Japanese localization.")
+        check(L10n.tr("顶部横幅", choice: "en") == "Top bar", "English layout selector")
+        check(L10n.tr("顶部横幅", choice: "zh-Hant") == "頂部橫幅", "Traditional Chinese layout selector")
+        check(L10n.tr("顶部横幅", choice: "ja") == "トップバー", "Japanese layout selector")
+        print("All v1.9 tests passed: protocols, timeline, migrations, score deltas, language selection, English/Chinese/Japanese localization.")
     }
 }

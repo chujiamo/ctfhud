@@ -1,5 +1,5 @@
 #!/bin/sh
-# CTF HUD v1.8.1: ARM64 Standard / Apple M1-M5 build profiles.
+# CTF HUD v1.9.1: ARM64 Standard / Apple M1-M5 build profiles.
 # Native macOS build only. Installs to /Applications, NEVER launches.
 set -eu
 
@@ -8,7 +8,7 @@ cd "$ROOT"
 
 usage() {
   cat <<'HELP'
-CTF HUD v1.8.1 — native Apple Silicon build profiles
+CTF HUD v1.9.1 — native Apple Silicon build profiles
 
 Usage:
   zsh build_app.sh [--profile auto|standard|m1|m2|m3|m4|m5]
@@ -88,7 +88,7 @@ HOST_PROFILE=$(detect_host_profile)
 
 if [ "$requested_explicit" -eq 0 ] && [ "$build_all" -eq 0 ]; then
   if [ -t 0 ]; then
-    printf '\nCTF HUD v1.8.1 — 选择优化目标（本机检测：%s）\n' "$HOST_PROFILE"
+    printf '\nCTF HUD v1.9.1 — 选择优化目标（本机检测：%s）\n' "$HOST_PROFILE"
     printf '%s\n' '  0) 自动识别（推荐）' '  1) Standard — 通用 ARM64' \
       '  2) Apple M1' '  3) Apple M2' '  4) Apple M3' \
       '  5) Apple M4' '  6) Apple M5'
@@ -166,8 +166,8 @@ compile_profile() {
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string><string>ja</string></array>
-<key>CFBundleShortVersionString</key><string>1.8.1</string>
-<key>CFBundleVersion</key><string>10</string>
+<key>CFBundleShortVersionString</key><string>1.9.0</string>
+<key>CFBundleVersion</key><string>11</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
@@ -187,7 +187,7 @@ PLIST
   # The actual compiled profile is stamped into the app for inspection.
   # All values here are validated enumerations; no local personal data is embedded.
   {
-    printf 'CTF HUD v1.8.1\n'
+    printf 'CTF HUD v1.9.1\n'
     printf 'Requested profile: %s\n' "$requested_profile"
     printf 'Compiled profile: %s\n' "$target_profile"
     printf 'Architecture: arm64\n'
