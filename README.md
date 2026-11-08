@@ -25,6 +25,12 @@ This repository currently provides source code and a local build script, rather 
 
 ## Build and install
 
+
+By homebrew:
+```sh
+brew install --cask chujiamo/tap/ctfhud
+```
+
 Clone or download the repository, then run:
 
 ```sh
